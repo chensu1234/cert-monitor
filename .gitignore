@@ -1,0 +1,12 @@
+# 忽略日志文件
+*.log
+
+# 忽略状态缓存目录
+/tmp/cert-monitor/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

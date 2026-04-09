@@ -1,8 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # cert-monitor - SSL/TLS 证书监控与过期告警工具
 # 作者: Chen Su
 # 许可证: MIT
+#
+# 依赖: Bash 4.0+, OpenSSL, curl
 #
 # 用法:
 #   ./bin/cert-monitor.sh                    # 使用默认配置
@@ -38,11 +40,44 @@ NOTIFY_EMAIL="${NOTIFY_EMAIL:-}"        # 邮件通知(预留)
 WATCH_MODE="${WATCH_MODE:-false}"       # 持续监控模式
 
 # ============================================================
-# 全局状态
+# 全局状态 (使用文件缓存，兼容 Bash 3.x)
 # ============================================================
-declare -A cert_expiry_cache    # 缓存证书到期时间
-declare -A last_alert_time      # 防止重复告警
-ALERT_COOLDOWN=3600             # 告警冷却时间(秒)
+STATE_DIR="${STATE_DIR:-/tmp/cert-monitor}"   # 状态文件目录
+ALERT_COOLDOWN=3600                              # 告警冷却时间(秒)
+
+# 初始化状态目录
+init_state() {
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+}
+
+# 读取缓存的到期天数
+get_cached_expiry() {
+    local key="$1"
+    local cache_file="$STATE_DIR/expiry_${key//[:\/]/_}"
+    [[ -f "$cache_file" ]] && cat "$cache_file" || echo ""
+}
+
+# 保存到期天数到缓存
+set_cached_expiry() {
+    local key="$1"
+    local val="$2"
+    local cache_file="$STATE_DIR/expiry_${key//[:\/]/_}"
+    echo "$val" > "$cache_file"
+}
+
+# 读取上次告警时间
+get_last_alert() {
+    local key="$1"
+    local alert_file="$STATE_DIR/alert_${key//[:\/]/_}"
+    [[ -f "$alert_file" ]] && cat "$alert_file" || echo "0"
+}
+
+# 保存告警时间
+set_last_alert() {
+    local key="$1"
+    local alert_file="$STATE_DIR/alert_${key//[:\/]/_}"
+    echo "$2" > "$alert_file"
+}
 
 # ============================================================
 # 帮助信息
@@ -183,7 +218,9 @@ parse_config() {
         entries+=("$line")
     done < "$CONFIG_FILE"
 
-    printf '%s\n' "${entries[@]}"
+    for entry in "${entries[@]}"; do
+        echo "$entry"
+    done
 }
 
 # ============================================================
@@ -327,10 +364,11 @@ should_alert() {
     local now
     now=$(date +%s)
 
-    local last_alert="${last_alert_time[$domain]:-0}"
+    local last_alert
+    last_alert=$(get_last_alert "$domain")
 
     if (( now - last_alert > ALERT_COOLDOWN )); then
-        last_alert_time[$domain]="$now"
+        set_last_alert "$domain" "$now"
         return 0
     fi
     return 1
@@ -372,7 +410,7 @@ check_cert() {
     (( pct > 100 )) && pct=100
 
     # 更新缓存
-    cert_expiry_cache[$entry]="$days_left"
+    set_cached_expiry "$entry" "$days_left"
 
     # 根据剩余天数判断状态
     local status_color="${GREEN}"
@@ -488,7 +526,10 @@ run_check() {
     echo ""
 
     # 解析配置
-    mapfile -t entries < <(parse_config)
+    local entries=()
+    while IFS= read -r line; do
+        entries+=("$line")
+    done < <(parse_config)
 
     if [[ ${#entries[@]} -eq 0 ]]; then
         log_error "配置文件中没有有效的域名条目"
@@ -500,38 +541,43 @@ run_check() {
 
     local total=0 ok=0 warn=0 crit=0 expired=0
     local has_error=0
+    init_state  # 初始化状态目录
 
+    set +e  # 允许 check_cert 非零退出
     for entry in "${entries[@]}"; do
-        (( total++ ))
-        check_cert "$entry" || {
-            local ret=$?
-            if (( ret == 1 )); then
-                # 可能是过期或警告
-                local days_left="${cert_expiry_cache[$entry]:-0}"
-                if (( days_left < 0 )); then
-                    (( expired++ ))
-                elif (( days_left <= CRIT_DAYS )); then
-                    (( crit++ ))
-                elif (( days_left <= WARN_DAYS )); then
-                    (( warn++ ))
-                fi
-            fi
-            # 检查是否连接错误
-            if (( ret == 1 )) && [[ "${cert_expiry_cache[$entry]:-}" == "" ]]; then
-                (( has_error++ ))
-            fi
-        }
+        (( total++ )) || true
 
-        # 检查返回值
-        local days_left="${cert_expiry_cache[$entry]:-0}"
-        if (( days_left > WARN_DAYS )); then
-            (( ok++ ))
-        elif (( days_left > CRIT_DAYS )); then
-            (( warn++ ))
-        elif (( days_left >= 0 )); then
-            (( crit++ ))
+        # 运行检查，捕获返回值 (允许非零退出)
+        (check_cert "$entry"); ret=$?
+
+        # 获取缓存的到期天数
+        local days_left
+        days_left=$(get_cached_expiry "$entry")
+
+        if [[ -z "$days_left" ]]; then
+            # 无法获取证书
+            (( has_error++ )) || true
+        elif [[ "$ret" == "1" ]]; then
+            # 检查失败，根据缓存的 days_left 判断
+            if (( days_left < 0 )); then
+                (( expired++ )) || true
+            elif (( days_left <= CRIT_DAYS )); then
+                (( crit++ )) || true
+            elif (( days_left <= WARN_DAYS )); then
+                (( warn++ )) || true
+            fi
+        else
+            # 检查成功
+            if (( days_left > WARN_DAYS )); then
+                (( ok++ )) || true
+            elif (( days_left > CRIT_DAYS )); then
+                (( warn++ )) || true
+            else
+                (( crit++ )) || true
+            fi
         fi
     done
+    set -e
 
     print_summary "$total" "$ok" "$warn" "$crit" "$expired"
 

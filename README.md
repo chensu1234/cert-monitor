@@ -10,7 +10,7 @@
 
 ## ✨ 特性
 
-- 🔒 **纯 Shell 实现** - 零依赖，仅需 OpenSSL
+- 🔒 **Bash 4.0+ 实现** - 零依赖，仅需 OpenSSL + curl
 - ⚡ **支持多域名批量检查** - 单次检查任意数量域名
 - 🔔 **多渠道告警** - Slack Webhook 通知支持
 - ⏰ **智能阈值告警** - 可配置警告/严重双阈值
@@ -23,7 +23,7 @@
 
 ### 环境要求
 
-- Bash 4.0+
+- Bash 4.0+ (macOS 需安装新版 Bash: `brew install bash`)
 - OpenSSL
 - curl (用于 Slack 通知)
 - 网络连接
