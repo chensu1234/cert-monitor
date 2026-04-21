@@ -1,0 +1,57 @@
+# cert-monitor — Example Configuration
+# TLS/SSL Certificate Expiration Monitor
+
+# Targets: list of host:port to check
+targets:
+  - "google.com:443"
+  - "github.com:443"
+  - "cloudflare.com:443"
+  - "letsencrypt.org:443"
+
+# Check thresholds
+check:
+  warn_days: 30
+  critical_days: 7
+  timeout: 10
+  interval: 3600
+
+# Notification settings
+notify:
+  enabled: false
+
+  webhook:
+    enabled: false
+    url: "https://your-webhook-endpoint.com/notify"
+    method: "POST"
+    headers:
+      Authorization: "Bearer YOUR_TOKEN"
+    body: |
+      {
+        "host": "{{.Host}}",
+        "days_remaining": {{.DaysRemaining}},
+        "issue": "{{.Issue}}",
+        "expires": "{{.NotAfter}}"
+      }
+
+  email:
+    enabled: false
+    host: "smtp.example.com"
+    port: 587
+    username: "user"
+    password: "pass"
+    from: "cert-monitor@example.com"
+    to: "admin@example.com"
+
+  slack:
+    enabled: false
+    webhook: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+    channel: "#alerts"
+
+server:
+  addr: ":8080"
+  port: 8080
+
+logging:
+  level: "info"
+  file: ""
+  format: "text"
